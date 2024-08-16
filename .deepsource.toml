@@ -1,0 +1,39 @@
+version = 1
+
+[[analyzers]]
+name = "java"
+
+  [analyzers.meta]
+  runtime_version = "11"
+
+[[analyzers]]
+name = "kube-linter"
+type = "community"
+
+[[analyzers]]
+name = "solhint"
+type = "community"
+
+[[analyzers]]
+name = "javascript"
+
+[[analyzers]]
+name = "shell"
+
+[[analyzers]]
+name = "python"
+
+  [analyzers.meta]
+  runtime_version = "3.x.x"
+
+[[analyzers]]
+name = "go"
+
+  [analyzers.meta]
+  import_root = "github.com/AKABABA-ETH/cosmos-sdk"
+
+[[analyzers]]
+name = "csharp"
+
+[[analyzers]]
+name = "docker"
