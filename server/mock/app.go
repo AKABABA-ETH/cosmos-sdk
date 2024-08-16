@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"path/filepath"
 
-	abci "github.com/cometbft/cometbft/abci/types"
+	abci "github.com/cometbft/cometbft/api/cometbft/abci/v1"
 	db "github.com/cosmos/cosmos-db"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
@@ -45,7 +49,7 @@ func NewApp(rootDir string, logger log.Logger) (servertypes.ABCI, error) {
 	router.SetInterfaceRegistry(interfaceRegistry)
 
 	newDesc := &grpc.ServiceDesc{
-		ServiceName: "test",
+		ServiceName: "Test",
 		Methods: []grpc.MethodDesc{
 			{
 				MethodName: "Test",
@@ -85,34 +89,34 @@ func KVStoreHandler(storeKey storetypes.StoreKey) bam.MsgServiceHandler {
 	}
 }
 
-// basic KV structure
+// KV is a basic kv structure
 type KV struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
 
-// What Genesis JSON is formatted as
+// GenesisJSON what genesis JSON is formatted as
 type GenesisJSON struct {
 	Values []KV `json:"values"`
 }
 
 // InitChainer returns a function that can initialize the chain
 // with key/value pairs
-func InitChainer(key storetypes.StoreKey) func(sdk.Context, *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
-	return func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
+func InitChainer(key storetypes.StoreKey) func(sdk.Context, *abci.InitChainRequest) (*abci.InitChainResponse, error) {
+	return func(ctx sdk.Context, req *abci.InitChainRequest) (*abci.InitChainResponse, error) {
 		stateJSON := req.AppStateBytes
 
 		genesisState := new(GenesisJSON)
 		err := json.Unmarshal(stateJSON, genesisState)
 		if err != nil {
-			return &abci.ResponseInitChain{}, err
+			return &abci.InitChainResponse{}, err
 		}
 
 		for _, val := range genesisState.Values {
 			store := ctx.KVStore(key)
 			store.Set([]byte(val.Key), []byte(val.Value))
 		}
-		return &abci.ResponseInitChain{}, nil
+		return &abci.InitChainResponse{}, nil
 	}
 }
 
@@ -140,7 +144,7 @@ func AppGenStateEmpty(_ *codec.LegacyAmino, _ genutiltypes.AppGenesis, _ []json.
 	return
 }
 
-// Manually write the handlers for this custom message
+// MsgServer manually write the handlers for this custom message
 type MsgServer interface {
 	Test(ctx context.Context, msg *KVStoreTx) (*sdk.Result, error)
 }
@@ -169,4 +173,48 @@ func MsgTestHandler(srv interface{}, ctx context.Context, dec func(interface{}) 
 
 func (m MsgServerImpl) Test(ctx context.Context, msg *KVStoreTx) (*sdk.Result, error) {
 	return KVStoreHandler(m.capKeyMainStore)(sdk.UnwrapSDKContext(ctx), msg)
+}
+
+func init() {
+	err := registerFauxDescriptor()
+	if err != nil {
+		panic(err)
+	}
+}
+
+func registerFauxDescriptor() error {
+	fauxDescriptor, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name:             proto.String("faux_proto/test.proto"),
+		Dependency:       nil,
+		PublicDependency: nil,
+		WeakDependency:   nil,
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: proto.String("KVStoreTx"),
+			},
+		},
+		EnumType: nil,
+		Service: []*descriptorpb.ServiceDescriptorProto{
+			{
+				Name: proto.String("Test"),
+				Method: []*descriptorpb.MethodDescriptorProto{
+					{
+						Name:       proto.String("Test"),
+						InputType:  proto.String("KVStoreTx"),
+						OutputType: proto.String("KVStoreTx"),
+					},
+				},
+			},
+		},
+		Extension:      nil,
+		Options:        nil,
+		SourceCodeInfo: nil,
+		Syntax:         nil,
+		Edition:        nil,
+	}, nil)
+	if err != nil {
+		return err
+	}
+
+	return protoregistry.GlobalFiles.RegisterFile(fauxDescriptor)
 }

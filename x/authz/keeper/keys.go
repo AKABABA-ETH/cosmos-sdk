@@ -3,11 +3,12 @@ package keeper
 import (
 	"time"
 
-	"github.com/cosmos/cosmos-sdk/internal/conv"
+	"cosmossdk.io/x/authz"
+	"cosmossdk.io/x/authz/internal/conv"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/address"
 	"github.com/cosmos/cosmos-sdk/types/kv"
-	"github.com/cosmos/cosmos-sdk/x/authz"
 )
 
 // Keys for store prefixes
@@ -35,6 +36,12 @@ func grantStoreKey(grantee, granter sdk.AccAddress, msgType string) []byte {
 	grantee = address.MustLengthPrefix(grantee)
 	key := sdk.AppendLengthPrefixedBytes(GrantKey, granter, grantee, m)
 
+	return key
+}
+
+func granterStoreKey(granter sdk.AccAddress) []byte {
+	granter = address.MustLengthPrefix(granter)
+	key := sdk.AppendLengthPrefixedBytes(GrantKey, granter)
 	return key
 }
 

@@ -1,25 +1,29 @@
 package mempool_test
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	protov2 "google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
+	_ "cosmossdk.io/api/cosmos/counter/v1"
+	_ "cosmossdk.io/api/cosmos/crypto/secp256k1"
+	"cosmossdk.io/core/transaction"
 	"cosmossdk.io/log"
+	"cosmossdk.io/x/auth/signing"
 
+	codectestutil "github.com/cosmos/cosmos-sdk/codec/testutil"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	"github.com/cosmos/cosmos-sdk/testutil/x/counter"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/mempool"
 	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	txsigning "github.com/cosmos/cosmos-sdk/types/tx/signing"
-	"github.com/cosmos/cosmos-sdk/x/auth/signing"
-	"github.com/cosmos/cosmos-sdk/x/distribution"
-	"github.com/cosmos/cosmos-sdk/x/gov"
 )
 
 // testPubKey is a dummy implementation of PubKey used for testing.
@@ -73,9 +77,29 @@ var (
 	_ cryptotypes.PubKey      = (*testPubKey)(nil)
 )
 
+func (tx testTx) Bytes() []byte {
+	return []byte{}
+}
+
+func (tx testTx) Hash() [32]byte {
+	return [32]byte{}
+}
+
+func (tx testTx) GetGasLimit() (uint64, error) {
+	return 0, nil
+}
+
+func (tx testTx) GetMessages() ([]transaction.Msg, error) {
+	return nil, nil
+}
+
+func (tx testTx) GetSenders() ([][]byte, error) {
+	return nil, nil
+}
+
 func (tx testTx) GetMsgs() []sdk.Msg { return nil }
 
-func (tx testTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
+func (tx testTx) GetReflectMessages() ([]protoreflect.Message, error) { return nil, nil }
 
 func (tx testTx) ValidateBasic() error { return nil }
 
@@ -87,11 +111,31 @@ type sigErrTx struct {
 	getSigs func() ([]txsigning.SignatureV2, error)
 }
 
+func (sigErrTx) Bytes() []byte {
+	return []byte{}
+}
+
+func (sigErrTx) Hash() [32]byte {
+	return [32]byte{}
+}
+
+func (sigErrTx) GetGasLimit() (uint64, error) {
+	return 0, nil
+}
+
+func (sigErrTx) GetMessages() ([]transaction.Msg, error) {
+	return nil, nil
+}
+
+func (sigErrTx) GetSenders() ([][]byte, error) {
+	return nil, nil
+}
+
 func (sigErrTx) Size() int64 { return 0 }
 
 func (sigErrTx) GetMsgs() []sdk.Msg { return nil }
 
-func (sigErrTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
+func (sigErrTx) GetReflectMessages() ([]protoreflect.Message, error) { return nil, nil }
 
 func (sigErrTx) ValidateBasic() error { return nil }
 
@@ -174,7 +218,7 @@ func (s *MempoolTestSuite) TestDefaultMempool() {
 
 	// a tx which does not implement SigVerifiableTx should not be inserted
 	tx := &sigErrTx{getSigs: func() ([]txsigning.SignatureV2, error) {
-		return nil, fmt.Errorf("error")
+		return nil, errors.New("error")
 	}}
 	require.Error(t, s.mempool.Insert(ctx, tx))
 	require.Error(t, s.mempool.Remove(tx))
@@ -209,7 +253,7 @@ type MempoolTestSuite struct {
 
 func (s *MempoolTestSuite) resetMempool() {
 	s.iterations = 0
-	s.mempool = mempool.NewSenderNonceMempool()
+	s.mempool = mempool.NewSenderNonceMempool(mempool.SenderNonceMaxTxOpt(5000))
 }
 
 func (s *MempoolTestSuite) SetupTest() {
@@ -227,16 +271,16 @@ func (s *MempoolTestSuite) TestSampleTxs() {
 	t := s.T()
 	s.resetMempool()
 	mp := s.mempool
-	delegatorTx, err := unmarshalTx(msgWithdrawDelegatorReward)
+	countTx, err := unmarshalTx(msgCounter)
 
 	require.NoError(t, err)
-	require.NoError(t, mp.Insert(ctxt, delegatorTx))
+	require.NoError(t, mp.Insert(ctxt, countTx))
 	require.Equal(t, 1, mp.CountTx())
 }
 
 func unmarshalTx(txBytes []byte) (sdk.Tx, error) {
-	cfg := moduletestutil.MakeTestEncodingConfig(distribution.AppModuleBasic{}, gov.AppModuleBasic{})
+	cfg := moduletestutil.MakeTestEncodingConfig(codectestutil.CodecOptions{}, counter.AppModule{})
 	return cfg.TxConfig.TxJSONDecoder()(txBytes)
 }
 
-var msgWithdrawDelegatorReward = []byte("{\"body\":{\"messages\":[{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper1lzhlnpahvznwfv4jmay2tgaha5kmz5qxerarrl\"},{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper1sjllsnramtg3ewxqwwrwjxfgc4n4ef9u2lcnj0\"},{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper196ax4vc0lwpxndu9dyhvca7jhxp70rmcvrj90c\"},{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper1k2d9ed9vgfuk2m58a2d80q9u6qljkh4vfaqjfq\"},{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper1vygmh344ldv9qefss9ek7ggsnxparljlmj56q5\"},{\"@type\":\"\\/cosmos.distribution.v1beta1.MsgWithdrawDelegatorReward\",\"delegator_address\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"validator_address\":\"cosmosvaloper1ej2es5fjztqjcd4pwa0zyvaevtjd2y5wxxp9gd\"}],\"memo\":\"\",\"timeout_height\":\"0\",\"extension_options\":[],\"non_critical_extension_options\":[]},\"auth_info\":{\"signer_infos\":[{\"public_key\":{\"@type\":\"\\/cosmos.crypto.secp256k1.PubKey\",\"key\":\"AmbXAy10a0SerEefTYQzqyGQdX5kiTEWJZ1PZKX1oswX\"},\"mode_info\":{\"single\":{\"mode\":\"SIGN_MODE_LEGACY_AMINO_JSON\"}},\"sequence\":\"119\"}],\"fee\":{\"amount\":[{\"denom\":\"uatom\",\"amount\":\"15968\"}],\"gas_limit\":\"638717\",\"payer\":\"\",\"granter\":\"\"}},\"signatures\":[\"ji+inUo4xGlN9piRQLdLCeJWa7irwnqzrMVPcmzJyG5y6NPc+ZuNaIc3uvk5NLDJytRB8AHX0GqNETR\\/Q8fz4Q==\"]}")
+var msgCounter = []byte("{\"body\":{\"messages\":[{\"@type\":\"\\/cosmos.counter.v1.MsgIncreaseCounter\",\"signer\":\"cosmos16w6g0whmw703t8h2m9qmq2fd9dwaw6fjszzjsw\",\"count\":\"1\"}],\"memo\":\"\",\"timeout_height\":\"0\",\"extension_options\":[],\"non_critical_extension_options\":[]},\"auth_info\":{\"signer_infos\":[{\"public_key\":{\"@type\":\"\\/cosmos.crypto.secp256k1.PubKey\",\"key\":\"AmbXAy10a0SerEefTYQzqyGQdX5kiTEWJZ1PZKX1oswX\"},\"mode_info\":{\"single\":{\"mode\":\"SIGN_MODE_LEGACY_AMINO_JSON\"}},\"sequence\":\"119\"}],\"fee\":{\"amount\":[{\"denom\":\"uatom\",\"amount\":\"15968\"}],\"gas_limit\":\"638717\",\"payer\":\"\",\"granter\":\"\"}},\"signatures\":[\"ji+inUo4xGlN9piRQLdLCeJWa7irwnqzrMVPcmzJyG5y6NPc+ZuNaIc3uvk5NLDJytRB8AHX0GqNETR\\/Q8fz4Q==\"]}")

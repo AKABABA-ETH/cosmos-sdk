@@ -2,16 +2,15 @@ package keeper
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/hashicorp/go-metrics"
 
 	errorsmod "cosmossdk.io/errors"
+	"cosmossdk.io/x/bank/types"
 
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-	"github.com/cosmos/cosmos-sdk/x/bank/types"
 )
 
 type msgServer struct {
@@ -178,7 +177,7 @@ func (k msgServer) SetSendEnabled(ctx context.Context, msg *types.MsgSetSendEnab
 	return &types.MsgSetSendEnabledResponse{}, nil
 }
 
-func (k msgServer) Burn(goCtx context.Context, msg *types.MsgBurn) (*types.MsgBurnResponse, error) {
+func (k msgServer) Burn(ctx context.Context, msg *types.MsgBurn) (*types.MsgBurnResponse, error) {
 	var (
 		from []byte
 		err  error
@@ -201,12 +200,12 @@ func (k msgServer) Burn(goCtx context.Context, msg *types.MsgBurn) (*types.MsgBu
 	if !coins.IsValid() {
 		return nil, errorsmod.Wrap(sdkerrors.ErrInvalidCoins, coins.String())
 	}
-	fmt.Println("coins", coins)
+
 	if !coins.IsAllPositive() {
 		return nil, errorsmod.Wrap(sdkerrors.ErrInvalidCoins, coins.String())
 	}
 
-	err = k.BurnCoins(goCtx, from, coins)
+	err = k.BurnCoins(ctx, from, coins)
 	if err != nil {
 		return nil, err
 	}

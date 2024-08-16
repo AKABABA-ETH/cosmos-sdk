@@ -17,7 +17,6 @@ integrated with the application `SimulationManager`.
 * [Simulation package](#simulation-package)
     * [Store decoders](#store-decoders)
     * [Randomized genesis](#randomized-genesis)
-    * [Randomized parameter changes](#randomized-parameter-changes)
     * [Random weighted operations](#random-weighted-operations)
     * [Random proposal contents](#random-proposal-contents)
 * [Registering simulation functions](#registering-simulation-functions)
@@ -62,7 +61,7 @@ Operations on the simulation are simulated using the full [transaction cycle](..
 Shown below is how weights are set:
 
 ```go reference
-https://github.com/cosmos/cosmos-sdk/blob/v/x/staking/simulation/operations.go#L19-L86
+https://github.com/cosmos/cosmos-sdk/blob/release/v0.50.x/x/staking/simulation/operations.go#L19-L86
 ```
 
 As you can see, the weights are predefined in this case. Options exist to override this behavior with different weights. One option is to use `*rand.Rand` to define a random weight for the operation, or you can inject your own predefined weights.
@@ -70,10 +69,12 @@ As you can see, the weights are predefined in this case. Options exist to overri
 Here is how one can override the above package `simappparams`.
 
 ```go reference
-https://github.com/cosmos/cosmos-sdk/blob/v/Makefile#L293-L299
+https://github.com/cosmos/cosmos-sdk/blob/release/v0.51.x/Makefile#L292-L334
 ```
 
-For the last test a tool called [runsim](https://github.com/cosmos/tools/tree/master/cmd/runsim) is used, this is used to parallelize go test instances, provide info to Github and slack integrations to provide information to your team on how the simulations are running.  
+The SDK simulations can be executed like normal tests in Go from the shell or within an IDE.
+Make sure that you pass the `-tags='sims` parameter to enable them and other params that make sense for your scenario.
+
 
 ### Random proposal contents
 
@@ -86,7 +87,7 @@ them to be used on the parameters.
 Now that all the required functions are defined, we need to integrate them into the module pattern within the `module.go`:
 
 ```go reference
-https://github.com/cosmos/cosmos-sdk/blob/v/x/distribution/module.go#L180-L203
+https://github.com/cosmos/cosmos-sdk/blob/release/v0.50.x/x/distribution/module.go#L180-L203
 ```
 
 ## App Simulator manager
@@ -124,4 +125,13 @@ func NewCustomApp(...) {
   app.sm.RegisterStoreDecoders()
   ...
 }
+```
+
+## Integration with the Go fuzzer framework
+
+The simulations provide deterministic behaviour already. The integration with the [Go fuzzer](https://go.dev/doc/security/fuzz/)
+can be done at a high level with the deterministic pseudo random number generator where the fuzzer provides varying numbers. 
+
+```go reference
+https://github.com/cosmos/cosmos-sdk/blob/release/v0.51.x/Makefile#L352-L355
 ```

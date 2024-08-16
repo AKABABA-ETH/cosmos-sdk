@@ -14,6 +14,7 @@ import (
 	"cosmossdk.io/store/gaskv"
 	"cosmossdk.io/store/iavl"
 	"cosmossdk.io/store/types"
+	"cosmossdk.io/store/wrapper"
 )
 
 // copied from iavl/store_test.go
@@ -90,7 +91,7 @@ func testPrefixStore(t *testing.T, baseStore types.KVStore, prefix []byte) {
 }
 
 func TestIAVLStorePrefix(t *testing.T) {
-	db := dbm.NewMemDB()
+	db := wrapper.NewDBWrapper(dbm.NewMemDB())
 	tree := tiavl.NewMutableTree(db, cacheSize, false, log.NewNopLogger())
 	iavlStore := iavl.UnsafeNewStore(tree)
 
@@ -249,7 +250,7 @@ func mockStoreWithStuff() types.KVStore {
 	store.Set(bz("key3"), bz("value3"))
 	store.Set(bz("something"), bz("else"))
 	store.Set(bz("k"), bz("val"))
-	store.Set(bz("ke"), bz("valu"))
+	store.Set(bz("ke"), bz("value"))
 	store.Set(bz("kee"), bz("valuu"))
 	return store
 }

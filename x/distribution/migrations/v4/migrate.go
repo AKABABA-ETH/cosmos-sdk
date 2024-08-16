@@ -6,45 +6,19 @@ import (
 
 	gogotypes "github.com/cosmos/gogoproto/types"
 
-	"cosmossdk.io/collections"
-	collcodec "cosmossdk.io/collections/codec"
+	"cosmossdk.io/core/appmodule"
 	"cosmossdk.io/core/store"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-var (
-	OldProposerKey = []byte{0x01}
-	NewProposerKey = collections.NewPrefix(1)
-)
+var OldProposerKey = []byte{0x01}
 
-func MigrateStore(ctx sdk.Context, storeService store.KVStoreService, cdc codec.BinaryCodec) error {
-	store := storeService.OpenKVStore(ctx)
-	bz, err := store.Get(OldProposerKey)
-	if err != nil {
-		return err
-	}
-
-	if bz == nil {
-		// previous proposer not set, nothing to do
-		return nil
-	}
-
-	addrValue := gogotypes.BytesValue{}
-	err = cdc.Unmarshal(bz, &addrValue)
-	if err != nil {
-		return err
-	}
-
-	sb := collections.NewSchemaBuilder(storeService)
-	prevProposer := collections.NewItem(sb, NewProposerKey, "previous_proposer", collcodec.KeyToValueCodec(sdk.ConsAddressKey))
-	_, err = sb.Build()
-	if err != nil {
-		return err
-	}
-
-	return prevProposer.Set(ctx, addrValue.GetValue())
+// MigrateStore removes the last proposer from store.
+func MigrateStore(ctx context.Context, env appmodule.Environment, cdc codec.BinaryCodec) error {
+	store := env.KVStoreService.OpenKVStore(ctx)
+	return store.Delete(OldProposerKey)
 }
 
 // GetPreviousProposerConsAddr returns the proposer consensus address for the

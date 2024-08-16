@@ -2,6 +2,7 @@ package cosmovisor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ type Launcher struct {
 }
 
 func NewLauncher(logger log.Logger, cfg *Config) (Launcher, error) {
-	fw, err := newUpgradeFileWatcher(cfg, logger)
+	fw, err := newUpgradeFileWatcher(cfg)
 	if err != nil {
 		return Launcher{}, err
 	}
@@ -101,7 +102,7 @@ func (l Launcher) Run(args []string, stdout, stderr io.Writer) (bool, error) {
 // It returns (true, nil) if an upgrade should be initiated (and we killed the process)
 // It returns (false, err) if the process died by itself
 // It returns (false, nil) if the process exited normally without triggering an upgrade. This is very unlikely
-// to happen with "start" but may happen with short-lived commands like `simd export ...`
+// to happen with "start" but may happen with short-lived commands like `simd genesis export ...`
 func (l Launcher) WaitForUpgradeOrExit(cmd *exec.Cmd) (bool, error) {
 	currentUpgrade, err := l.cfg.UpgradeInfo()
 	if err != nil {
@@ -175,13 +176,13 @@ func (l Launcher) doBackup() error {
 		}
 
 		if uInfo.Name == "" {
-			return fmt.Errorf("upgrade-info.json is empty")
+			return errors.New("upgrade-info.json is empty")
 		}
 
 		// a destination directory, Format YYYY-MM-DD
 		st := time.Now()
-		stStr := fmt.Sprintf("%d-%d-%d", st.Year(), st.Month(), st.Day())
-		dst := filepath.Join(l.cfg.DataBackupPath, fmt.Sprintf("data"+"-backup-%s", stStr))
+		ymd := fmt.Sprintf("%d-%d-%d", st.Year(), st.Month(), st.Day())
+		dst := filepath.Join(l.cfg.DataBackupPath, fmt.Sprintf("data"+"-backup-%s", ymd))
 
 		l.logger.Info("starting to take backup of data directory", "backup start time", st)
 
@@ -200,7 +201,7 @@ func (l Launcher) doBackup() error {
 
 // doCustomPreUpgrade executes the custom preupgrade script if provided.
 func (l Launcher) doCustomPreUpgrade() error {
-	if l.cfg.CustomPreupgrade == "" {
+	if l.cfg.CustomPreUpgrade == "" {
 		return nil
 	}
 
@@ -220,7 +221,7 @@ func (l Launcher) doCustomPreUpgrade() error {
 	}
 
 	// check if preupgradeFile is executable file
-	preupgradeFile := filepath.Join(l.cfg.Home, "cosmovisor", l.cfg.CustomPreupgrade)
+	preupgradeFile := filepath.Join(l.cfg.Home, "cosmovisor", l.cfg.CustomPreUpgrade)
 	l.logger.Info("looking for COSMOVISOR_CUSTOM_PREUPGRADE file", "file", preupgradeFile)
 	info, err := os.Stat(preupgradeFile)
 	if err != nil {
@@ -240,7 +241,7 @@ func (l Launcher) doCustomPreUpgrade() error {
 	if oldMode != newMode {
 		if err := os.Chmod(preupgradeFile, newMode); err != nil {
 			l.logger.Info("COSMOVISOR_CUSTOM_PREUPGRADE could not add execute permission")
-			return fmt.Errorf("COSMOVISOR_CUSTOM_PREUPGRADE could not add execute permission")
+			return errors.New("COSMOVISOR_CUSTOM_PREUPGRADE could not add execute permission")
 		}
 	}
 
@@ -263,22 +264,25 @@ func (l Launcher) doCustomPreUpgrade() error {
 func (l *Launcher) doPreUpgrade() error {
 	counter := 0
 	for {
-		if counter > l.cfg.PreupgradeMaxRetries {
-			return fmt.Errorf("pre-upgrade command failed. reached max attempt of retries - %d", l.cfg.PreupgradeMaxRetries)
+		if counter > l.cfg.PreUpgradeMaxRetries {
+			return fmt.Errorf("pre-upgrade command failed. reached max attempt of retries - %d", l.cfg.PreUpgradeMaxRetries)
 		}
 
 		if err := l.executePreUpgradeCmd(); err != nil {
 			counter++
 
-			switch err.(*exec.ExitError).ProcessState.ExitCode() {
-			case 1:
-				l.logger.Info("pre-upgrade command does not exist. continuing the upgrade.")
-				return nil
-			case 30:
-				return fmt.Errorf("pre-upgrade command failed : %w", err)
-			case 31:
-				l.logger.Error("pre-upgrade command failed. retrying", "error", err, "attempt", counter)
-				continue
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				switch exitErr.ProcessState.ExitCode() {
+				case 1:
+					l.logger.Info("pre-upgrade command does not exist. continuing the upgrade.")
+					return nil
+				case 30:
+					return fmt.Errorf("pre-upgrade command failed : %w", err)
+				case 31:
+					l.logger.Error("pre-upgrade command failed. retrying", "error", err, "attempt", counter)
+					continue
+				}
 			}
 		}
 

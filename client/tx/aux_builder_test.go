@@ -7,24 +7,39 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client/tx"
 	"github.com/cosmos/cosmos-sdk/codec"
+	"github.com/cosmos/cosmos-sdk/codec/testutil"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	"github.com/cosmos/cosmos-sdk/testutil/testdata"
+	"github.com/cosmos/cosmos-sdk/testutil/x/counter"
+	countertypes "github.com/cosmos/cosmos-sdk/testutil/x/counter/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	typestx "github.com/cosmos/cosmos-sdk/types/tx"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
-	"github.com/cosmos/cosmos-sdk/x/bank"
+)
+
+const (
+	memo          = "waboom"
+	timeoutHeight = uint64(5)
+)
+
+var (
+	_, pub1, addr1 = testdata.KeyTestPubAddr()
+	rawSig         = []byte("dummy")
+	msg1           = &countertypes.MsgIncreaseCounter{Signer: addr1.String(), Count: 1}
+
+	chainID = "test-chain"
 )
 
 func TestAuxTxBuilder(t *testing.T) {
-	bankModule := bank.AppModuleBasic{}
-	cdc := moduletestutil.MakeTestEncodingConfig(bankModule).Codec
+	counterModule := counter.AppModule{}
+	cdc := moduletestutil.MakeTestEncodingConfig(testutil.CodecOptions{}, counterModule).Codec
 	reg := codectypes.NewInterfaceRegistry()
 
 	testdata.RegisterInterfaces(reg)
 	// required for test case: "GetAuxSignerData works for DIRECT_AUX"
-	bankModule.RegisterInterfaces(reg)
+	counterModule.RegisterInterfaces(reg)
 
 	var b tx.AuxTxBuilder
 

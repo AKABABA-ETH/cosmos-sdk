@@ -8,7 +8,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-const DefaultClientConfigTemplate = `# This is a TOML config file.
+const (
+	DefaultClientConfigTemplate = `# This is a TOML config file.
 # For more information, see https://github.com/toml-lang/toml
 
 ###############################################################################
@@ -19,13 +20,24 @@ const DefaultClientConfigTemplate = `# This is a TOML config file.
 chain-id = "{{ .ChainID }}"
 # The keyring's backend, where the keys are stored (os|file|kwallet|pass|test|memory)
 keyring-backend = "{{ .KeyringBackend }}"
+# Default key name, if set, defines the default key to use for signing transaction when the --from flag is not specified
+keyring-default-keyname = "{{ .KeyringDefaultKeyName }}"
 # CLI output format (text|json)
 output = "{{ .Output }}"
 # <host>:<port> to CometBFT RPC interface for this chain
 node = "{{ .Node }}"
 # Transaction broadcasting mode (sync|async)
 broadcast-mode = "{{ .BroadcastMode }}"
+
+# gRPC server endpoint to which the client will connect.
+# It can be overwritten by the --grpc-addr flag in each command.
+grpc-address = "{{ .GRPC.Address }}"
+
+# Allow the gRPC client to connect over insecure channels.
+# It can be overwritten by the --grpc-insecure flag in each command.
+grpc-insecure = {{ .GRPC.Insecure }}
 `
+)
 
 var configTemplate *template.Template
 

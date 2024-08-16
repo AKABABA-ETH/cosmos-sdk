@@ -2,6 +2,7 @@ package flag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -14,10 +15,17 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
-	"cosmossdk.io/client/v2/autocli/keyring"
+	msgv1 "cosmossdk.io/api/cosmos/msg/v1"
+	"cosmossdk.io/client/v2/internal/flags"
 	"cosmossdk.io/client/v2/internal/util"
+	"cosmossdk.io/core/address"
+)
 
-	"github.com/cosmos/cosmos-sdk/client"
+const (
+	AddressStringScalarType          = "cosmos.AddressString"
+	ValidatorAddressStringScalarType = "cosmos.ValidatorAddressString"
+	ConsensusAddressStringScalarType = "cosmos.ConsensusAddressString"
+	PubkeyScalarType                 = "cosmos.Pubkey"
 )
 
 // Builder manages options for building pflag flags for protobuf messages.
@@ -39,11 +47,10 @@ type Builder struct {
 	messageFlagTypes map[protoreflect.FullName]Type
 	scalarFlagTypes  map[string]Type
 
-	// Keyring implementation
-	Keyring keyring.Keyring
-
-	// ClientCtx contains the necessary information needed to execute the commands.
-	ClientCtx *client.Context
+	// Address Codecs are the address codecs to use for client/v2.
+	AddressCodec          address.Codec
+	ValidatorAddressCodec address.ValidatorAddressCodec
+	ConsensusAddressCodec address.ConsensusAddressCodec
 }
 
 func (b *Builder) init() {
@@ -56,44 +63,80 @@ func (b *Builder) init() {
 
 	if b.scalarFlagTypes == nil {
 		b.scalarFlagTypes = map[string]Type{}
-		b.scalarFlagTypes["cosmos.AddressString"] = addressStringType{}
-		b.scalarFlagTypes["cosmos.ValidatorAddressString"] = validatorAddressStringType{}
-		b.scalarFlagTypes["cosmos.ConsensusAddressString"] = consensusAddressStringType{}
+		b.scalarFlagTypes[AddressStringScalarType] = addressStringType{}
+		b.scalarFlagTypes[ValidatorAddressStringScalarType] = validatorAddressStringType{}
+		b.scalarFlagTypes[ConsensusAddressStringScalarType] = consensusAddressStringType{}
+		b.scalarFlagTypes[PubkeyScalarType] = pubkeyType{}
 	}
 }
 
+// ValidateAndComplete the flag builder fields.
+// It returns an error if any of the required fields are missing.
+// If the keyring is nil, it will be set to a no keyring.
+func (b *Builder) ValidateAndComplete() error {
+	if b.AddressCodec == nil {
+		return errors.New("address codec is required in flag builder")
+	}
+
+	if b.ValidatorAddressCodec == nil {
+		return errors.New("validator address codec is required in flag builder")
+	}
+
+	if b.ConsensusAddressCodec == nil {
+		return errors.New("consensus address codec is required in flag builder")
+	}
+
+	if b.TypeResolver == nil {
+		return errors.New("type resolver is required in flag builder")
+	}
+
+	if b.FileResolver == nil {
+		return errors.New("file resolver is required in flag builder")
+	}
+
+	return nil
+}
+
+// DefineMessageFlagType allows to extend custom protobuf message type handling for flags (and positional arguments).
 func (b *Builder) DefineMessageFlagType(messageName protoreflect.FullName, flagType Type) {
 	b.init()
 	b.messageFlagTypes[messageName] = flagType
 }
 
+// DefineScalarFlagType allows to extend custom scalar type handling for flags (and positional arguments).
 func (b *Builder) DefineScalarFlagType(scalarName string, flagType Type) {
 	b.init()
 	b.scalarFlagTypes[scalarName] = flagType
 }
 
-func (b *Builder) AddMessageFlags(ctx context.Context, flagSet *pflag.FlagSet, messageType protoreflect.MessageType, commandOptions *autocliv1.RpcCommandOptions) (*MessageBinder, error) {
+// AddMessageFlags adds flags for each field in the message to the flag set.
+func (b *Builder) AddMessageFlags(ctx *context.Context, flagSet *pflag.FlagSet, messageType protoreflect.MessageType, commandOptions *autocliv1.RpcCommandOptions) (*MessageBinder, error) {
 	return b.addMessageFlags(ctx, flagSet, messageType, commandOptions, namingOptions{})
 }
 
-// AddMessageFlags adds flags for each field in the message to the flag set.
-func (b *Builder) addMessageFlags(ctx context.Context, flagSet *pflag.FlagSet, messageType protoreflect.MessageType, commandOptions *autocliv1.RpcCommandOptions, options namingOptions) (*MessageBinder, error) {
-	fields := messageType.Descriptor().Fields()
-	numFields := fields.Len()
-	handler := &MessageBinder{
+// addMessageFlags adds flags for each field in the message to the flag set.
+func (b *Builder) addMessageFlags(ctx *context.Context, flagSet *pflag.FlagSet, messageType protoreflect.MessageType, commandOptions *autocliv1.RpcCommandOptions, options namingOptions) (*MessageBinder, error) {
+	messageBinder := &MessageBinder{
 		messageType: messageType,
+		// positional args are also parsed using a FlagSet so that we can reuse all the same parsers
+		positionalFlagSet: pflag.NewFlagSet("positional", pflag.ContinueOnError),
 	}
 
+	fields := messageType.Descriptor().Fields()
+	signerFieldName := GetSignerFieldName(messageType.Descriptor())
+
 	isPositional := map[string]bool{}
-	n := len(commandOptions.PositionalArgs)
-	// positional args are also parsed using a FlagSet so that we can reuse all the same parsers
-	handler.positionalFlagSet = pflag.NewFlagSet("positional", pflag.ContinueOnError)
+
+	positionalArgsLen := len(commandOptions.PositionalArgs)
 	for i, arg := range commandOptions.PositionalArgs {
 		isPositional[arg.ProtoField] = true
 
-		field := fields.ByName(protoreflect.Name(arg.ProtoField))
-		if field == nil {
-			return nil, fmt.Errorf("can't find field %s on %s", arg.ProtoField, messageType.Descriptor().FullName())
+		// verify if a positional field is a signer field
+		if arg.ProtoField == signerFieldName {
+			messageBinder.SignerInfo = SignerInfo{
+				PositionalArgIndex: i,
+				FieldName:          arg.ProtoField,
+			}
 		}
 
 		if arg.Optional && arg.Varargs {
@@ -101,24 +144,29 @@ func (b *Builder) addMessageFlags(ctx context.Context, flagSet *pflag.FlagSet, m
 		}
 
 		if arg.Varargs {
-			if i != n-1 {
+			if i != positionalArgsLen-1 {
 				return nil, fmt.Errorf("varargs positional argument %s must be the last argument", arg.ProtoField)
 			}
 
-			handler.hasVarargs = true
+			messageBinder.hasVarargs = true
 		}
 
 		if arg.Optional {
-			if i != n-1 {
+			if i != positionalArgsLen-1 {
 				return nil, fmt.Errorf("optional positional argument %s must be the last argument", arg.ProtoField)
 			}
 
-			handler.hasOptional = true
+			messageBinder.hasOptional = true
+		}
+
+		field := fields.ByName(protoreflect.Name(arg.ProtoField))
+		if field == nil {
+			return nil, fmt.Errorf("can't find field %s on %s", arg.ProtoField, messageType.Descriptor().FullName())
 		}
 
 		_, hasValue, err := b.addFieldFlag(
 			ctx,
-			handler.positionalFlagSet,
+			messageBinder.positionalFlagSet,
 			field,
 			&autocliv1.FlagOptions{Name: fmt.Sprintf("%d", i)},
 			namingOptions{},
@@ -127,45 +175,80 @@ func (b *Builder) addMessageFlags(ctx context.Context, flagSet *pflag.FlagSet, m
 			return nil, err
 		}
 
-		handler.positionalArgs = append(handler.positionalArgs, fieldBinding{
+		messageBinder.positionalArgs = append(messageBinder.positionalArgs, fieldBinding{
 			field:    field,
 			hasValue: hasValue,
 		})
 	}
 
-	if handler.hasVarargs {
-		handler.CobraArgs = cobra.MinimumNArgs(n - 1)
-		handler.MandatoryArgUntil = n - 1
-	} else if handler.hasOptional {
-		handler.CobraArgs = cobra.RangeArgs(n-1, n)
-		handler.MandatoryArgUntil = n - 1
-	} else {
-		handler.CobraArgs = cobra.ExactArgs(n)
-		handler.MandatoryArgUntil = n
+	switch {
+	case messageBinder.hasVarargs:
+		messageBinder.CobraArgs = cobra.MinimumNArgs(positionalArgsLen - 1)
+		messageBinder.mandatoryArgUntil = positionalArgsLen - 1
+	case messageBinder.hasOptional:
+		messageBinder.CobraArgs = cobra.RangeArgs(positionalArgsLen-1, positionalArgsLen)
+		messageBinder.mandatoryArgUntil = positionalArgsLen - 1
+	default:
+		messageBinder.CobraArgs = cobra.ExactArgs(positionalArgsLen)
+		messageBinder.mandatoryArgUntil = positionalArgsLen
 	}
 
 	// validate flag options
-	for name := range commandOptions.FlagOptions {
+	for name, opts := range commandOptions.FlagOptions {
 		if fields.ByName(protoreflect.Name(name)) == nil {
 			return nil, fmt.Errorf("can't find field %s on %s specified as a flag", name, messageType.Descriptor().FullName())
 		}
+
+		// verify if a flag is a signer field
+		if name == signerFieldName {
+			messageBinder.SignerInfo = SignerInfo{
+				FieldName: name,
+				IsFlag:    true,
+				FlagName:  opts.Name,
+			}
+		}
 	}
 
+	// if signer has not been specified as positional arguments,
+	// add it as `--from` flag (instead of --field-name flags)
+	if signerFieldName != "" && messageBinder.SignerInfo == (SignerInfo{}) {
+		if commandOptions.FlagOptions == nil {
+			commandOptions.FlagOptions = make(map[string]*autocliv1.FlagOptions)
+		}
+
+		commandOptions.FlagOptions[signerFieldName] = &autocliv1.FlagOptions{
+			Name:      flags.FlagFrom,
+			Usage:     "Name or address with which to sign the message",
+			Shorthand: "f",
+		}
+
+		messageBinder.SignerInfo = SignerInfo{
+			FieldName: signerFieldName,
+			IsFlag:    true,
+			FlagName:  flags.FlagFrom,
+		}
+	}
+
+	// define all other fields as flags
 	flagOptsByFlagName := map[string]*autocliv1.FlagOptions{}
-	for i := 0; i < numFields; i++ {
+	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
-		if isPositional[string(field.Name())] {
+		fieldName := string(field.Name())
+
+		// skips positional args and signer field if already set
+		if isPositional[fieldName] ||
+			(fieldName == signerFieldName && messageBinder.SignerInfo.FlagName == flags.FlagFrom) {
 			continue
 		}
 
-		flagOpts := commandOptions.FlagOptions[string(field.Name())]
+		flagOpts := commandOptions.FlagOptions[fieldName]
 		name, hasValue, err := b.addFieldFlag(ctx, flagSet, field, flagOpts, options)
-		flagOptsByFlagName[name] = flagOpts
 		if err != nil {
 			return nil, err
 		}
+		flagOptsByFlagName[name] = flagOpts
 
-		handler.flagBindings = append(handler.flagBindings, fieldBinding{
+		messageBinder.flagBindings = append(messageBinder.flagBindings, fieldBinding{
 			hasValue: hasValue,
 			field:    field,
 		})
@@ -184,11 +267,11 @@ func (b *Builder) addMessageFlags(ctx context.Context, flagSet *pflag.FlagSet, m
 		}
 	})
 
-	return handler, nil
+	return messageBinder, nil
 }
 
 // bindPageRequest create a flag for pagination
-func (b *Builder) bindPageRequest(ctx context.Context, flagSet *pflag.FlagSet, field protoreflect.FieldDescriptor) (HasValue, error) {
+func (b *Builder) bindPageRequest(ctx *context.Context, flagSet *pflag.FlagSet, field protoreflect.FieldDescriptor) (HasValue, error) {
 	return b.addMessageFlags(
 		ctx,
 		flagSet,
@@ -205,7 +288,7 @@ type namingOptions struct {
 }
 
 // addFieldFlag adds a flag for the provided field to the flag set.
-func (b *Builder) addFieldFlag(ctx context.Context, flagSet *pflag.FlagSet, field protoreflect.FieldDescriptor, opts *autocliv1.FlagOptions, options namingOptions) (name string, hasValue HasValue, err error) {
+func (b *Builder) addFieldFlag(ctx *context.Context, flagSet *pflag.FlagSet, field protoreflect.FieldDescriptor, opts *autocliv1.FlagOptions, options namingOptions) (name string, hasValue HasValue, err error) {
 	if opts == nil {
 		opts = &autocliv1.FlagOptions{}
 	}
@@ -221,10 +304,6 @@ func (b *Builder) addFieldFlag(ctx context.Context, flagSet *pflag.FlagSet, fiel
 	}
 
 	usage := opts.Usage
-	if usage == "" {
-		usage = util.DescriptorDocs(field)
-	}
-
 	shorthand := opts.Shorthand
 	defaultValue := opts.DefaultValue
 
@@ -259,10 +338,11 @@ func (b *Builder) addFieldFlag(ctx context.Context, flagSet *pflag.FlagSet, fiel
 
 	// This is a bit of hacking around the pflag API, but the
 	// defaultValue is set in this way because this is much easier than trying
-	// to parse the string into the types that StringSliceP, Int32P, etc. expect
+	// to parse the string into the types that StringSliceP, Int32P, etc.
 	if defaultValue != "" {
 		err = flagSet.Set(name, defaultValue)
 	}
+
 	return name, val, err
 }
 
@@ -338,10 +418,10 @@ func (b *Builder) resolveFlagType(field protoreflect.FieldDescriptor) Type {
 }
 
 func (b *Builder) resolveFlagTypeBasic(field protoreflect.FieldDescriptor) Type {
-	scalar := proto.GetExtension(field.Options(), cosmos_proto.E_Scalar)
-	if scalar != nil {
+	scalar, ok := GetScalarType(field)
+	if ok {
 		b.init()
-		if typ, ok := b.scalarFlagTypes[scalar.(string)]; ok {
+		if typ, ok := b.scalarFlagTypes[scalar]; ok {
 			return typ
 		}
 	}
@@ -362,4 +442,22 @@ func (b *Builder) resolveFlagTypeBasic(field protoreflect.FieldDescriptor) Type 
 	default:
 		return nil
 	}
+}
+
+// GetScalarType gets scalar type of a field.
+func GetScalarType(field protoreflect.FieldDescriptor) (string, bool) {
+	scalar := proto.GetExtension(field.Options(), cosmos_proto.E_Scalar)
+	scalarStr, ok := scalar.(string)
+	return scalarStr, ok
+}
+
+// GetSignerFieldName gets signer field name of a message.
+// AutoCLI supports only one signer field per message.
+func GetSignerFieldName(descriptor protoreflect.MessageDescriptor) string {
+	signersFields := proto.GetExtension(descriptor.Options(), msgv1.E_Signer).([]string)
+	if len(signersFields) == 0 {
+		return ""
+	}
+
+	return signersFields[0]
 }

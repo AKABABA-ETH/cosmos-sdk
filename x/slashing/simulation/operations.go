@@ -4,7 +4,9 @@ import (
 	"errors"
 	"math/rand"
 
-	"github.com/cosmos/cosmos-sdk/baseapp"
+	"cosmossdk.io/x/slashing/keeper"
+	"cosmossdk.io/x/slashing/types"
+
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -13,8 +15,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	"github.com/cosmos/cosmos-sdk/x/simulation"
-	"github.com/cosmos/cosmos-sdk/x/slashing/keeper"
-	"github.com/cosmos/cosmos-sdk/x/slashing/types"
 )
 
 // Simulation operation weights constants
@@ -58,7 +58,7 @@ func SimulateMsgUnjail(
 	sk types.StakingKeeper,
 ) simtypes.Operation {
 	return func(
-		r *rand.Rand, app *baseapp.BaseApp, ctx sdk.Context,
+		r *rand.Rand, app simtypes.AppEntrypoint, ctx sdk.Context,
 		accs []simtypes.Account, chainID string,
 	) (simtypes.OperationMsg, []simtypes.FutureOperation, error) {
 		msgType := sdk.MsgTypeURL(&types.MsgUnjail{})
@@ -92,16 +92,9 @@ func SimulateMsgUnjail(
 		if err != nil {
 			return simtypes.NoOpMsg(types.ModuleName, msgType, "unable to get validator consensus key"), nil, err
 		}
-		info, err := k.ValidatorSigningInfo.Get(ctx, consAddr)
-		if err != nil {
-			return simtypes.NoOpMsg(types.ModuleName, msgType, "unable to find validator signing info"), nil, err // skip
-		}
+		info, _ := k.ValidatorSigningInfo.Get(ctx, consAddr)
 
-		selfDel, err := sk.Delegation(ctx, simAccount.Address, bz)
-		if err != nil {
-			return simtypes.NoOpMsg(types.ModuleName, msgType, "unable to get self delegation"), nil, err
-		}
-
+		selfDel, _ := sk.Delegation(ctx, simAccount.Address, bz)
 		if selfDel == nil {
 			return simtypes.NoOpMsg(types.ModuleName, msgType, "self delegation is nil"), nil, nil // skip
 		}
@@ -111,7 +104,7 @@ func SimulateMsgUnjail(
 
 		fees, err := simtypes.RandomFees(r, spendable)
 		if err != nil {
-			return simtypes.NoOpMsg(types.ModuleName, msgType, "unable to generate fees"), nil, err
+			return simtypes.NoOpMsg(types.ModuleName, msgType, "unable to generate fees"), nil, nil
 		}
 
 		msg := types.NewMsgUnjail(validator.GetOperator())
@@ -139,6 +132,7 @@ func SimulateMsgUnjail(
 		// - self delegation too low
 		if info.Tombstoned ||
 			ctx.HeaderInfo().Time.Before(info.JailedUntil) ||
+			selfDel.GetShares().IsNil() ||
 			validator.TokensFromShares(selfDel.GetShares()).TruncateInt().LT(validator.GetMinSelfDelegation()) {
 			if res != nil && err == nil {
 				if info.Tombstoned {
@@ -147,7 +141,8 @@ func SimulateMsgUnjail(
 				if ctx.HeaderInfo().Time.Before(info.JailedUntil) {
 					return simtypes.NewOperationMsg(msg, true, ""), nil, errors.New("validator unjailed while validator still in jail period")
 				}
-				if validator.TokensFromShares(selfDel.GetShares()).TruncateInt().LT(validator.GetMinSelfDelegation()) {
+				if selfDel.GetShares().IsNil() ||
+					validator.TokensFromShares(selfDel.GetShares()).TruncateInt().LT(validator.GetMinSelfDelegation()) {
 					return simtypes.NewOperationMsg(msg, true, ""), nil, errors.New("validator unjailed even though self-delegation too low")
 				}
 			}

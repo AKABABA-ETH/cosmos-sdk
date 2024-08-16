@@ -1,15 +1,22 @@
 package types
 
 import (
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	cmttypes "github.com/cometbft/cometbft/types"
+	"errors"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	cmtproto "github.com/cometbft/cometbft/api/cometbft/types/v1"
+	cmttypes "github.com/cometbft/cometbft/types"
+	"github.com/cosmos/gogoproto/types"
 )
 
-var _ sdk.Msg = &MsgUpdateParams{}
+func (msg MsgUpdateParams) ToProtoConsensusParams() (cmtproto.ConsensusParams, error) {
+	if msg.Evidence == nil || msg.Block == nil || msg.Validator == nil {
+		return cmtproto.ConsensusParams{}, errors.New("all parameters must be present")
+	}
 
-func (msg MsgUpdateParams) ToProtoConsensusParams() cmtproto.ConsensusParams {
+	if msg.Abci != nil && msg.Feature != nil && msg.Feature.VoteExtensionsEnableHeight != nil {
+		return cmtproto.ConsensusParams{}, errors.New("abci in sections Feature and (deprecated) ABCI cannot be used simultaneously")
+	}
+
 	cp := cmtproto.ConsensusParams{
 		Block: &cmtproto.BlockParams{
 			MaxBytes: msg.Block.MaxBytes,
@@ -23,14 +30,20 @@ func (msg MsgUpdateParams) ToProtoConsensusParams() cmtproto.ConsensusParams {
 		Validator: &cmtproto.ValidatorParams{
 			PubKeyTypes: msg.Validator.PubKeyTypes,
 		},
-		Version: cmttypes.DefaultConsensusParams().ToProto().Version, // Version is stored in x/upgrade
+		Version:   cmttypes.DefaultConsensusParams().ToProto().Version, // Version is stored in x/upgrade
+		Feature:   msg.Feature,
+		Synchrony: msg.Synchrony,
 	}
 
 	if msg.Abci != nil {
-		cp.Abci = &cmtproto.ABCIParams{
-			VoteExtensionsEnableHeight: msg.Abci.VoteExtensionsEnableHeight,
+		if cp.Feature == nil {
+			cp.Feature = &cmtproto.FeatureParams{}
+		}
+
+		cp.Feature.VoteExtensionsEnableHeight = &types.Int64Value{
+			Value: msg.Abci.VoteExtensionsEnableHeight,
 		}
 	}
 
-	return cp
+	return cp, nil
 }

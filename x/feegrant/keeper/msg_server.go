@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"cosmossdk.io/core/event"
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/x/feegrant"
 
@@ -83,4 +84,22 @@ func (k msgServer) RevokeAllowance(ctx context.Context, msg *feegrant.MsgRevokeA
 	}
 
 	return &feegrant.MsgRevokeAllowanceResponse{}, nil
+}
+
+// PruneAllowances removes expired allowances from the store.
+func (k msgServer) PruneAllowances(ctx context.Context, req *feegrant.MsgPruneAllowances) (*feegrant.MsgPruneAllowancesResponse, error) {
+	// 75 is an arbitrary value, we can change it later if needed
+	err := k.RemoveExpiredAllowances(ctx, 75)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := k.EventService.EventManager(ctx).EmitKV(
+		feegrant.EventTypePruneFeeGrant,
+		event.NewAttribute(feegrant.AttributeKeyPruner, req.Pruner),
+	); err != nil {
+		return nil, err
+	}
+
+	return &feegrant.MsgPruneAllowancesResponse{}, nil
 }

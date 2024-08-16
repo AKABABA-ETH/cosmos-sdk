@@ -8,8 +8,8 @@ import (
 
 	dbm "github.com/cosmos/cosmos-db"
 
-	"cosmossdk.io/log"
 	"cosmossdk.io/store/pruning/types"
+	storetypes "cosmossdk.io/store/types"
 )
 
 // Manager is an abstraction to handle the logic needed for
@@ -17,11 +17,11 @@ import (
 // based on the strategy described by the pruning options.
 type Manager struct {
 	db               dbm.DB
-	logger           log.Logger
+	logger           storetypes.Logger
 	opts             types.PruningOptions
 	snapshotInterval uint64
 	// Snapshots are taken in a separate goroutine from the regular execution
-	// and can be delivered asynchrounously via HandleSnapshotHeight.
+	// and can be delivered asynchronously via HandleSnapshotHeight.
 	// Therefore, we sync access to pruneSnapshotHeights with this mutex.
 	pruneSnapshotHeightsMx sync.RWMutex
 	// These are the heights that are multiples of snapshotInterval and kept for state sync snapshots.
@@ -43,10 +43,10 @@ func (e *NegativeHeightsError) Error() string {
 var pruneSnapshotHeightsKey = []byte("s/prunesnapshotheights")
 
 // NewManager returns a new Manager with the given db and logger.
-// The retuned manager uses a pruning strategy of "nothing" which
+// The returned manager uses a pruning strategy of "nothing" which
 // keeps all heights. Users of the Manager may change the strategy
 // by calling SetOptions.
-func NewManager(db dbm.DB, logger log.Logger) *Manager {
+func NewManager(db dbm.DB, logger storetypes.Logger) *Manager {
 	return &Manager{
 		db:                   db,
 		logger:               logger,
@@ -99,7 +99,7 @@ func (m *Manager) SetSnapshotInterval(snapshotInterval uint64) {
 	m.snapshotInterval = snapshotInterval
 }
 
-// GetPruningHeight returns the height which can prune upto if it is able to prune at the given height.
+// GetPruningHeight returns the height which can prune up to if it is able to prune at the given height.
 func (m *Manager) GetPruningHeight(height int64) int64 {
 	if m.opts.GetPruningStrategy() == types.PruningNothing {
 		return 0
@@ -128,7 +128,7 @@ func (m *Manager) GetPruningHeight(height int64) int64 {
 	}
 
 	// the snapshot `m.pruneSnapshotHeights[0]` is already operated,
-	// so we can prune upto `m.pruneSnapshotHeights[0] + int64(m.snapshotInterval) - 1`
+	// so we can prune up to `m.pruneSnapshotHeights[0] + int64(m.snapshotInterval) - 1`
 	snHeight := m.pruneSnapshotHeights[0] + int64(m.snapshotInterval) - 1
 	if snHeight < pruneHeight {
 		return snHeight

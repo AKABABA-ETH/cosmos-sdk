@@ -5,12 +5,19 @@ import (
 	"testing"
 	"time"
 
-	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/stretchr/testify/suite"
 
 	"cosmossdk.io/depinject"
 	"cosmossdk.io/log"
+	authkeeper "cosmossdk.io/x/auth/keeper"
+	bankkeeper "cosmossdk.io/x/bank/keeper"
+	"cosmossdk.io/x/bank/testutil"
+	banktypes "cosmossdk.io/x/bank/types"
+	"cosmossdk.io/x/group"
+	groupkeeper "cosmossdk.io/x/group/keeper"
+	"cosmossdk.io/x/group/simulation"
+	grouptestutil "cosmossdk.io/x/group/testutil"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -19,14 +26,6 @@ import (
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
-	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
-	"github.com/cosmos/cosmos-sdk/x/bank/testutil"
-	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	"github.com/cosmos/cosmos-sdk/x/group"
-	groupkeeper "github.com/cosmos/cosmos-sdk/x/group/keeper"
-	"github.com/cosmos/cosmos-sdk/x/group/simulation"
-	grouptestutil "github.com/cosmos/cosmos-sdk/x/group/testutil"
 )
 
 type SimTestSuite struct {
@@ -130,13 +129,9 @@ func (suite *SimTestSuite) TestSimulateCreateGroup() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 
-	_, err := suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// execute operation
 	op := simulation.SimulateMsgCreateGroup(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper)
@@ -147,7 +142,7 @@ func (suite *SimTestSuite) TestSimulateCreateGroup() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -157,13 +152,9 @@ func (suite *SimTestSuite) TestSimulateCreateGroupWithPolicy() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 
-	_, err := suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// execute operation
 	op := simulation.SimulateMsgCreateGroupWithPolicy(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper)
@@ -174,7 +165,7 @@ func (suite *SimTestSuite) TestSimulateCreateGroupWithPolicy() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -184,14 +175,16 @@ func (suite *SimTestSuite) TestSimulateCreateGroupPolicy() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
-	_, err := suite.groupKeeper.CreateGroup(suite.ctx,
+	_, err = suite.groupKeeper.CreateGroup(suite.ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -199,14 +192,8 @@ func (suite *SimTestSuite) TestSimulateCreateGroupPolicy() {
 	)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgCreateGroupPolicy(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgCreateGroupPolicy(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -214,7 +201,7 @@ func (suite *SimTestSuite) TestSimulateCreateGroupPolicy() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -224,15 +211,17 @@ func (suite *SimTestSuite) TestSimulateSubmitProposal() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -242,7 +231,7 @@ func (suite *SimTestSuite) TestSimulateSubmitProposal() {
 
 	// setup a group account
 	accountReq := &group.MsgCreateGroupPolicy{
-		Admin:   acc.Address.String(),
+		Admin:   accAddr,
 		GroupId: groupRes.GroupId,
 	}
 	err = accountReq.SetDecisionPolicy(group.NewThresholdDecisionPolicy("1", time.Hour, 0))
@@ -250,14 +239,8 @@ func (suite *SimTestSuite) TestSimulateSubmitProposal() {
 	groupPolicyRes, err := suite.groupKeeper.CreateGroupPolicy(ctx, accountReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgSubmitProposal(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgSubmitProposal(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -275,10 +258,12 @@ func (suite *SimTestSuite) TestWithdrawProposal() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 3)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
-	addr := acc.Address.String()
+	addr := accAddr
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
 			Admin: addr,
@@ -314,14 +299,8 @@ func (suite *SimTestSuite) TestWithdrawProposal() {
 	_, err = suite.groupKeeper.SubmitProposal(ctx, proposalReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgWithdrawProposal(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgWithdrawProposal(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -339,10 +318,12 @@ func (suite *SimTestSuite) TestSimulateVote() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
-	addr := acc.Address.String()
+	addr := accAddr
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
 			Admin: addr,
@@ -379,14 +360,8 @@ func (suite *SimTestSuite) TestSimulateVote() {
 	_, err = suite.groupKeeper.SubmitProposal(ctx, proposalReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgVote(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgVote(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -404,10 +379,12 @@ func (suite *SimTestSuite) TestSimulateExec() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 1)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
-	addr := acc.Address.String()
+	addr := accAddr
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
 			Admin: addr,
@@ -452,14 +429,8 @@ func (suite *SimTestSuite) TestSimulateExec() {
 	})
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgExec(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgExec(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -477,14 +448,16 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupAdmin() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
-	_, err := suite.groupKeeper.CreateGroup(suite.ctx,
+	_, err = suite.groupKeeper.CreateGroup(suite.ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -492,14 +465,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupAdmin() {
 	)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupAdmin(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupAdmin(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -507,7 +474,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupAdmin() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -517,14 +484,16 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMetadata() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
-	_, err := suite.groupKeeper.CreateGroup(suite.ctx,
+	_, err = suite.groupKeeper.CreateGroup(suite.ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -532,14 +501,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMetadata() {
 	)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupMetadata(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupMetadata(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -547,7 +510,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMetadata() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -557,14 +520,16 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMembers() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
-	_, err := suite.groupKeeper.CreateGroup(suite.ctx,
+	_, err = suite.groupKeeper.CreateGroup(suite.ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -572,14 +537,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMembers() {
 	)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupMembers(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupMembers(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -587,7 +546,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupMembers() {
 	err = proto.Unmarshal(operationMsg.Msg, &msg)
 	suite.Require().NoError(err)
 	suite.Require().True(operationMsg.OK)
-	suite.Require().Equal(acc.Address.String(), msg.Admin)
+	suite.Require().Equal(accAddr, msg.Admin)
 	suite.Require().Len(futureOperations, 0)
 }
 
@@ -597,15 +556,17 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyAdmin() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -615,7 +576,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyAdmin() {
 
 	// setup a group account
 	accountReq := &group.MsgCreateGroupPolicy{
-		Admin:   acc.Address.String(),
+		Admin:   accAddr,
 		GroupId: groupRes.GroupId,
 	}
 	err = accountReq.SetDecisionPolicy(group.NewThresholdDecisionPolicy("1", time.Hour, 0))
@@ -623,14 +584,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyAdmin() {
 	groupPolicyRes, err := suite.groupKeeper.CreateGroupPolicy(ctx, accountReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupPolicyAdmin(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupPolicyAdmin(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -648,15 +603,17 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyDecisionPolicy() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -666,7 +623,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyDecisionPolicy() {
 
 	// setup a group account
 	accountReq := &group.MsgCreateGroupPolicy{
-		Admin:   acc.Address.String(),
+		Admin:   accAddr,
 		GroupId: groupRes.GroupId,
 	}
 	err = accountReq.SetDecisionPolicy(group.NewThresholdDecisionPolicy("1", time.Hour, 0))
@@ -674,14 +631,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyDecisionPolicy() {
 	groupPolicyRes, err := suite.groupKeeper.CreateGroupPolicy(ctx, accountReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupPolicyDecisionPolicy(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupPolicyDecisionPolicy(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -699,15 +650,17 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyMetadata() {
 	r := rand.New(s)
 	accounts := suite.getTestingAccounts(r, 2)
 	acc := accounts[0]
+	accAddr, err := suite.accountKeeper.AddressCodec().BytesToString(acc.Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
-			Admin: acc.Address.String(),
+			Admin: accAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: acc.Address.String(),
+					Address: accAddr,
 					Weight:  "1",
 				},
 			},
@@ -717,7 +670,7 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyMetadata() {
 
 	// setup a group account
 	accountReq := &group.MsgCreateGroupPolicy{
-		Admin:   acc.Address.String(),
+		Admin:   accAddr,
 		GroupId: groupRes.GroupId,
 	}
 	err = accountReq.SetDecisionPolicy(group.NewThresholdDecisionPolicy("1", time.Hour, 0))
@@ -725,14 +678,8 @@ func (suite *SimTestSuite) TestSimulateUpdateGroupPolicyMetadata() {
 	groupPolicyRes, err := suite.groupKeeper.CreateGroupPolicy(ctx, accountReq)
 	suite.Require().NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	suite.Require().NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgUpdateGroupPolicyMetadata(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper)
+	op := simulation.SimulateMsgUpdateGroupPolicyMetadata(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.accountKeeper, suite.bankKeeper, suite.groupKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
@@ -752,26 +699,31 @@ func (suite *SimTestSuite) TestSimulateLeaveGroup() {
 	// setup 4 account
 	accounts := suite.getTestingAccounts(r, 4)
 	admin := accounts[0]
-	member1 := accounts[1]
-	member2 := accounts[2]
-	member3 := accounts[3]
+	adminAddr, err := suite.accountKeeper.AddressCodec().BytesToString(admin.Address)
+	suite.Require().NoError(err)
+	member1, err := suite.accountKeeper.AddressCodec().BytesToString(accounts[1].Address)
+	suite.Require().NoError(err)
+	member2, err := suite.accountKeeper.AddressCodec().BytesToString(accounts[2].Address)
+	suite.Require().NoError(err)
+	member3, err := suite.accountKeeper.AddressCodec().BytesToString(accounts[3].Address)
+	suite.Require().NoError(err)
 
 	// setup a group
 	ctx := suite.ctx
 	groupRes, err := suite.groupKeeper.CreateGroup(ctx,
 		&group.MsgCreateGroup{
-			Admin: admin.Address.String(),
+			Admin: adminAddr,
 			Members: []group.MemberRequest{
 				{
-					Address: member1.Address.String(),
+					Address: member1,
 					Weight:  "1",
 				},
 				{
-					Address: member2.Address.String(),
+					Address: member2,
 					Weight:  "2",
 				},
 				{
-					Address: member3.Address.String(),
+					Address: member3,
 					Weight:  "1",
 				},
 			},
@@ -781,7 +733,7 @@ func (suite *SimTestSuite) TestSimulateLeaveGroup() {
 
 	// setup a group account
 	accountReq := &group.MsgCreateGroupPolicy{
-		Admin:    admin.Address.String(),
+		Admin:    adminAddr,
 		GroupId:  groupRes.GroupId,
 		Metadata: "",
 	}
@@ -789,14 +741,8 @@ func (suite *SimTestSuite) TestSimulateLeaveGroup() {
 	_, err = suite.groupKeeper.CreateGroupPolicy(ctx, accountReq)
 	require.NoError(err)
 
-	_, err = suite.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: suite.app.LastBlockHeight() + 1,
-		Hash:   suite.app.LastCommitID().Hash,
-	})
-	require.NoError(err)
-
 	// execute operation
-	op := simulation.SimulateMsgLeaveGroup(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.groupKeeper, suite.accountKeeper, suite.bankKeeper)
+	op := simulation.SimulateMsgLeaveGroup(codec.NewProtoCodec(suite.interfaceRegistry), suite.txConfig, suite.groupKeeper, suite.accountKeeper, suite.bankKeeper, simulation.NewSharedState())
 	operationMsg, futureOperations, err := op(r, suite.app.BaseApp, suite.ctx, accounts, "")
 	suite.Require().NoError(err)
 
