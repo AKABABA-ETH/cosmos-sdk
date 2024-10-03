@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/cosmos/gogoproto/proto"
-	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -15,11 +14,12 @@ import (
 	appv1alpha1 "cosmossdk.io/api/cosmos/app/v1alpha1"
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
 	reflectionv1 "cosmossdk.io/api/cosmos/reflection/v1"
-	"cosmossdk.io/core/app"
 	appmodulev2 "cosmossdk.io/core/appmodule/v2"
 	"cosmossdk.io/core/comet"
-	"cosmossdk.io/core/legacy"
+	"cosmossdk.io/core/event"
+	"cosmossdk.io/core/header"
 	"cosmossdk.io/core/registry"
+	"cosmossdk.io/core/server"
 	"cosmossdk.io/core/store"
 	"cosmossdk.io/core/transaction"
 	"cosmossdk.io/depinject"
@@ -27,6 +27,7 @@ import (
 	"cosmossdk.io/log"
 	"cosmossdk.io/runtime/v2/services"
 	"cosmossdk.io/server/v2/stf"
+	rootstore "cosmossdk.io/store/v2/root"
 )
 
 var (
@@ -41,19 +42,19 @@ type appModule[T transaction.Tx] struct {
 func (m appModule[T]) IsOnePerModuleType() {}
 func (m appModule[T]) IsAppModule()        {}
 
-func (m appModule[T]) RegisterServices(registar grpc.ServiceRegistrar) error {
+func (m appModule[T]) RegisterServices(registrar grpc.ServiceRegistrar) error {
 	autoCliQueryService, err := services.NewAutoCLIQueryService(m.app.moduleManager.modules)
 	if err != nil {
 		return err
 	}
 
-	autocliv1.RegisterQueryServer(registar, autoCliQueryService)
+	autocliv1.RegisterQueryServer(registrar, autoCliQueryService)
 
 	reflectionSvc, err := services.NewReflectionService()
 	if err != nil {
 		return err
 	}
-	reflectionv1.RegisterReflectionServiceServer(registar, reflectionSvc)
+	reflectionv1.RegisterReflectionServiceServer(registrar, reflectionSvc)
 
 	return nil
 }
@@ -98,8 +99,7 @@ func init() {
 			ProvideAppBuilder[transaction.Tx],
 			ProvideEnvironment[transaction.Tx],
 			ProvideModuleManager[transaction.Tx],
-			ProvideCometService,
-			ProvideAppVersionModifier[transaction.Tx],
+			ProvideStoreBuilder,
 		),
 		appconfig.Invoke(SetupAppBuilder),
 	)
@@ -107,7 +107,7 @@ func init() {
 
 func ProvideAppBuilder[T transaction.Tx](
 	interfaceRegistrar registry.InterfaceRegistrar,
-	amino legacy.Amino,
+	amino registry.AminoRegistrar,
 ) (
 	*AppBuilder[T],
 	*stf.MsgRouterBuilder,
@@ -127,12 +127,13 @@ func ProvideAppBuilder[T transaction.Tx](
 
 	msgRouterBuilder := stf.NewMsgRouterBuilder()
 	app := &App[T]{
-		storeKeys:               nil,
-		interfaceRegistrar:      interfaceRegistrar,
-		amino:                   amino,
-		msgRouterBuilder:        msgRouterBuilder,
-		queryRouterBuilder:      stf.NewMsgRouterBuilder(), // TODO dedicated query router
-		GRPCMethodsToMessageMap: map[string]func() proto.Message{},
+		storeKeys:          nil,
+		interfaceRegistrar: interfaceRegistrar,
+		amino:              amino,
+		msgRouterBuilder:   msgRouterBuilder,
+		queryRouterBuilder: stf.NewMsgRouterBuilder(), // TODO dedicated query router
+		QueryHandlers:      map[string]appmodulev2.Handler{},
+		storeLoader:        DefaultStoreLoader,
 	}
 	appBuilder := &AppBuilder[T]{app: app}
 
@@ -146,9 +147,14 @@ type AppInputs struct {
 	AppBuilder         *AppBuilder[transaction.Tx]
 	ModuleManager      *MM[transaction.Tx]
 	InterfaceRegistrar registry.InterfaceRegistrar
-	LegacyAmino        legacy.Amino
+	LegacyAmino        registry.AminoRegistrar
 	Logger             log.Logger
-	Viper              *viper.Viper `optional:"true"`
+	// StoreBuilder is a builder for a store/v2 RootStore satisfying the Store interface
+	StoreBuilder *StoreBuilder
+	// StoreOptions are required as input for the StoreBuilder. If not provided, the default options are used.
+	StoreOptions *rootstore.Options `optional:"true"`
+	// DynamicConfig can be nil in client wiring, but is required in server wiring.
+	DynamicConfig server.DynamicConfig `optional:"true"`
 }
 
 func SetupAppBuilder(inputs AppInputs) {
@@ -159,8 +165,22 @@ func SetupAppBuilder(inputs AppInputs) {
 	app.moduleManager.RegisterInterfaces(inputs.InterfaceRegistrar)
 	app.moduleManager.RegisterLegacyAminoCodec(inputs.LegacyAmino)
 
-	if inputs.Viper != nil {
-		inputs.AppBuilder.viper = inputs.Viper
+	if inputs.DynamicConfig == nil {
+		return
+	}
+	storeOptions := rootstore.DefaultStoreOptions()
+	if inputs.StoreOptions != nil {
+		storeOptions = *inputs.StoreOptions
+	}
+	var err error
+	app.db, err = inputs.StoreBuilder.Build(
+		inputs.Logger,
+		app.storeKeys,
+		inputs.DynamicConfig,
+		storeOptions,
+	)
+	if err != nil {
+		panic(err)
 	}
 }
 
@@ -178,6 +198,9 @@ func ProvideEnvironment[T transaction.Tx](
 	config *runtimev2.Module,
 	key depinject.ModuleKey,
 	appBuilder *AppBuilder[T],
+	kvFactory store.KVStoreServiceFactory,
+	headerService header.Service,
+	eventService event.Service,
 ) (
 	appmodulev2.Environment,
 	store.KVStoreService,
@@ -199,7 +222,7 @@ func ProvideEnvironment[T transaction.Tx](
 		}
 
 		registerStoreKey(appBuilder, kvStoreKey)
-		kvService = stf.NewKVStoreService([]byte(kvStoreKey))
+		kvService = kvFactory([]byte(kvStoreKey))
 
 		memStoreKey := fmt.Sprintf("memory:%s", key.Name())
 		registerStoreKey(appBuilder, memStoreKey)
@@ -209,9 +232,9 @@ func ProvideEnvironment[T transaction.Tx](
 	env := appmodulev2.Environment{
 		Logger:             logger,
 		BranchService:      stf.BranchService{},
-		EventService:       stf.NewEventService(),
+		EventService:       eventService,
 		GasService:         stf.NewGasMeterService(),
-		HeaderService:      stf.HeaderService{},
+		HeaderService:      headerService,
 		QueryRouterService: stf.NewQueryRouterService(),
 		MsgRouterService:   stf.NewMsgRouterService([]byte(key.Name())),
 		TransactionService: services.NewContextAwareTransactionService(),
@@ -222,8 +245,8 @@ func ProvideEnvironment[T transaction.Tx](
 	return env, kvService, memKvService
 }
 
-func registerStoreKey[T transaction.Tx](wrapper *AppBuilder[T], key string) {
-	wrapper.app.storeKeys = append(wrapper.app.storeKeys, key)
+func registerStoreKey[T transaction.Tx](builder *AppBuilder[T], key string) {
+	builder.app.storeKeys = append(builder.app.storeKeys, key)
 }
 
 func storeKeyOverride(config *runtimev2.Module, moduleName string) *runtimev2.StoreKeyConfig {
@@ -236,12 +259,30 @@ func storeKeyOverride(config *runtimev2.Module, moduleName string) *runtimev2.St
 	return nil
 }
 
-func ProvideCometService() comet.Service {
-	return &services.ContextAwareCometInfoService{}
-}
-
-// ProvideAppVersionModifier returns nil, `app.VersionModifier` is a feature of BaseApp and neither used nor required for runtim/v2.
-// nil is acceptable, see: https://github.com/cosmos/cosmos-sdk/blob/0a6ee406a02477ae8ccbfcbe1b51fc3930087f4c/x/upgrade/keeper/keeper.go#L438
-func ProvideAppVersionModifier[T transaction.Tx](app *AppBuilder[T]) app.VersionModifier {
-	return nil
+// DefaultServiceBindings provides default services for the following service interfaces:
+// - store.KVStoreServiceFactory
+// - header.Service
+// - comet.Service
+//
+// They are all required.  For most use cases these default services bindings should be sufficient.
+// Power users (or tests) may wish to provide their own services bindings, in which case they must
+// supply implementations for each of the above interfaces.
+func DefaultServiceBindings() depinject.Config {
+	var (
+		kvServiceFactory store.KVStoreServiceFactory = func(actor []byte) store.KVStoreService {
+			return services.NewGenesisKVService(
+				actor,
+				stf.NewKVStoreService(actor),
+			)
+		}
+		headerService header.Service = services.NewGenesisHeaderService(stf.HeaderService{})
+		cometService  comet.Service  = &services.ContextAwareCometInfoService{}
+		eventService                 = stf.NewEventService()
+	)
+	return depinject.Supply(
+		kvServiceFactory,
+		headerService,
+		cometService,
+		eventService,
+	)
 }

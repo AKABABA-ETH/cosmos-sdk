@@ -36,6 +36,18 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 ## [Unreleased]
 
+### Features
+
+* [#21972](https://github.com/cosmos/cosmos-sdk/pull/21972) Add `prepare-upgrade` command
+
+### Improvements
+
+* [#21462](https://github.com/cosmos/cosmos-sdk/pull/21462) Pass `stdin` to binary.
+
+### Features
+
+* [#21932](https://github.com/cosmos/cosmos-sdk/pull/21932) Add `cosmovisor show-upgrade-info` command to display the upgrade-info.json into stdout.
+
 ## v1.6.0 - 2024-08-12
 
 ## Improvements
@@ -75,7 +87,7 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 ### API Breaking Changes
 
-* [#13603](https://github.com/cosmos-sdk/pull/13603) Rename cosmovisor package to `cosmossdk.io/tools/cosmovisor`.
+* [#13603](https://github.com/cosmos/cosmos-sdk/pull/13603) Rename cosmovisor package to `cosmossdk.io/tools/cosmovisor`.
 
 ## v1.3.0 - 2022-09-11
 
