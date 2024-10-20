@@ -13,10 +13,12 @@ import (
 	"cosmossdk.io/log"
 	"cosmossdk.io/runtime/v2"
 	serverstore "cosmossdk.io/server/v2/store"
+	"cosmossdk.io/store/v2"
 	"cosmossdk.io/store/v2/root"
 	basedepinject "cosmossdk.io/x/accounts/defaults/base/depinject"
 	lockupdepinject "cosmossdk.io/x/accounts/defaults/lockup/depinject"
 	multisigdepinject "cosmossdk.io/x/accounts/defaults/multisig/depinject"
+	stakingkeeper "cosmossdk.io/x/staking/keeper"
 	upgradekeeper "cosmossdk.io/x/upgrade/keeper"
 
 	"github.com/cosmos/cosmos-sdk/client"
@@ -38,10 +40,12 @@ type SimApp[T transaction.Tx] struct {
 	appCodec          codec.Codec
 	txConfig          client.TxConfig
 	interfaceRegistry codectypes.InterfaceRegistry
+	store             store.RootStore
 
 	// required keepers during wiring
 	// others keepers are all in the app
 	UpgradeKeeper *upgradekeeper.Keeper
+	StakingKeeper *stakingkeeper.Keeper
 }
 
 func init() {
@@ -62,7 +66,6 @@ func AppConfig() depinject.Config {
 			codec.ProvideAddressCodec,
 			codec.ProvideProtoCodec,
 			codec.ProvideLegacyAmino,
-			runtime.ProvideSingletonScopedStoreBuilder,
 		),
 		depinject.Invoke(
 			std.RegisterInterfaces,
@@ -79,8 +82,8 @@ func NewSimApp[T transaction.Tx](
 	var (
 		app          = &SimApp[T]{}
 		appBuilder   *runtime.AppBuilder[T]
-		storeBuilder root.Builder
 		err          error
+		storeBuilder root.Builder
 
 		// merge the AppConfig and other configuration in one config
 		appConfig = depinject.Configs(
@@ -161,6 +164,7 @@ func NewSimApp[T transaction.Tx](
 		&app.txConfig,
 		&app.interfaceRegistry,
 		&app.UpgradeKeeper,
+		&app.StakingKeeper,
 	); err != nil {
 		panic(err)
 	}
@@ -170,7 +174,8 @@ func NewSimApp[T transaction.Tx](
 	if err != nil {
 		panic(err)
 	}
-	_, err = storeBuilder.Build(logger, storeConfig)
+
+	app.store, err = storeBuilder.Build(logger, storeConfig)
 	if err != nil {
 		panic(err)
 	}
@@ -213,7 +218,16 @@ func (app *SimApp[T]) TxConfig() client.TxConfig {
 	return app.txConfig
 }
 
-// GetStore gets the app store.
-func (app *SimApp[T]) GetStore() any {
-	return app.App.GetStore()
+// GetStore returns the root store.
+func (app *SimApp[T]) GetStore() store.RootStore {
+	return app.store
+}
+
+// Close overwrites the base Close method to close the stores.
+func (app *SimApp[T]) Close() error {
+	if err := app.store.Close(); err != nil {
+		return err
+	}
+
+	return app.App.Close()
 }
