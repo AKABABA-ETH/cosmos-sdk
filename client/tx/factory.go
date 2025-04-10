@@ -90,6 +90,7 @@ func NewFactoryCLI(clientCtx client.Context, flagSet *pflag.FlagSet) (Factory, e
 	memo := clientCtx.Viper.GetString(flags.FlagNote)
 	timestampUnix := clientCtx.Viper.GetInt64(flags.FlagTimeoutTimestamp)
 	timeoutTimestamp := time.Unix(timestampUnix, 0)
+	timeoutHeight := clientCtx.Viper.GetUint64(flags.FlagTimeoutHeight)
 	unordered := clientCtx.Viper.GetBool(flags.FlagUnordered)
 
 	gasStr := clientCtx.Viper.GetString(flags.FlagGas)
@@ -107,6 +108,7 @@ func NewFactoryCLI(clientCtx client.Context, flagSet *pflag.FlagSet) (Factory, e
 		simulateAndExecute: gasSetting.Simulate,
 		accountNumber:      accNum,
 		sequence:           accSeq,
+		timeoutHeight:      timeoutHeight,
 		timeoutTimestamp:   timeoutTimestamp,
 		unordered:          unordered,
 		gasAdjustment:      gasAdj,
@@ -342,14 +344,14 @@ func (f Factory) BuildUnsignedTx(msgs ...sdk.Msg) (client.TxBuilder, error) {
 
 		// f.gas is a uint64 and we should convert to LegacyDec
 		// without the risk of under/overflow via uint64->int64.
-		glDec := math.LegacyNewDecFromBigInt(new(big.Int).SetUint64(f.gas))
+		gasLimitDec := math.LegacyNewDecFromBigInt(new(big.Int).SetUint64(f.gas))
 
 		// Derive the fees based on the provided gas prices, where
 		// fee = ceil(gasPrice * gasLimit).
 		fees = make(sdk.Coins, len(f.gasPrices))
 
 		for i, gp := range f.gasPrices {
-			fee := gp.Amount.Mul(glDec)
+			fee := gp.Amount.Mul(gasLimitDec)
 			fees[i] = sdk.NewCoin(gp.Denom, fee.Ceil().RoundInt())
 		}
 	}
@@ -452,7 +454,7 @@ func (f Factory) BuildSimTx(msgs ...sdk.Msg) ([]byte, error) {
 
 	encoder := f.txConfig.TxEncoder()
 	if encoder == nil {
-		return nil, errors.New("cannot simulate tx: tx encoder is nil")
+		return nil, fmt.Errorf("cannot simulate tx: tx encoder is nil")
 	}
 
 	return encoder(txb.GetTx())
@@ -461,7 +463,7 @@ func (f Factory) BuildSimTx(msgs ...sdk.Msg) ([]byte, error) {
 // getSimPK gets the public key to use for building a simulation tx.
 // Note, we should only check for keys in the keybase if we are in simulate and execute mode,
 // e.g. when using --gas=auto.
-// When using --dry-run, we are in simulation mode only and should not check the keybase.
+// When using --dry-run, we are is simulation mode only and should not check the keybase.
 // Ref: https://github.com/cosmos/cosmos-sdk/issues/11283
 func (f Factory) getSimPK() (cryptotypes.PubKey, error) {
 	var (
@@ -516,6 +518,10 @@ func (f Factory) Prepare(clientCtx client.Context) (Factory, error) {
 
 	fc := f
 	from := clientCtx.FromAddress
+
+	if err := fc.accountRetriever.EnsureExists(clientCtx, from); err != nil {
+		return fc, err
+	}
 
 	initNum, initSeq := fc.accountNumber, fc.sequence
 	if initNum == 0 || initSeq == 0 {

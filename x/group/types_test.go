@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"cosmossdk.io/x/group"
+	"github.com/cosmos/cosmos-sdk/x/group"
 )
 
 func TestThresholdDecisionPolicyValidate(t *testing.T) {
@@ -236,6 +236,28 @@ func TestPercentageDecisionPolicyAllow(t *testing.T) {
 			group.DecisionPolicyResult{
 				Allow: false,
 				Final: false,
+			},
+			false,
+		},
+		{
+			"empty total power",
+			&group.PercentageDecisionPolicy{
+				Percentage: "0.5",
+				Windows: &group.DecisionPolicyWindows{
+					VotingPeriod: time.Second * 100,
+				},
+			},
+			&group.TallyResult{
+				YesCount:        "1",
+				NoCount:         "0",
+				AbstainCount:    "0",
+				NoWithVetoCount: "0",
+			},
+			"0",
+			time.Second * 50,
+			group.DecisionPolicyResult{
+				Allow: false,
+				Final: true,
 			},
 			false,
 		},

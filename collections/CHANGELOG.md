@@ -31,6 +31,18 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 ## [Unreleased]
 
+## [v1.2.0](https://github.com/cosmos/cosmos-sdk/releases/tag/collections%2Fv1.2.0)
+
+### Improvements
+
+* [#24081](https://github.com/cosmos/cosmos-sdk/pull/24081) Remove `cosmossdk.io/core` dependency.
+
+## [v1.1.0](https://github.com/cosmos/cosmos-sdk/releases/tag/collections%2Fv1.1.0)
+
+### Improvements
+
+* [#23515](https://github.com/cosmos/cosmos-sdk/pull/23515) Bring in `collections/protocodec` go module as package within `collections` module.
+
 ## [v1.0.0](https://github.com/cosmos/cosmos-sdk/releases/tag/collections%2Fv1.0.0)
 
 ### Features

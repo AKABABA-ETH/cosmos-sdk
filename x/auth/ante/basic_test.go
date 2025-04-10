@@ -1,15 +1,12 @@
 package ante_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	appmodulev2 "cosmossdk.io/core/appmodule/v2"
-	"cosmossdk.io/core/header"
 	storetypes "cosmossdk.io/store/types"
 
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
@@ -40,7 +37,7 @@ func TestValidateBasic(t *testing.T) {
 	invalidTx, err := suite.CreateTestTx(suite.ctx, privs, accNums, accSeqs, suite.ctx.ChainID(), signing.SignMode_SIGN_MODE_DIRECT)
 	require.NoError(t, err)
 
-	vbd := ante.NewValidateBasicDecorator(suite.accountKeeper.GetEnvironment())
+	vbd := ante.NewValidateBasicDecorator()
 	antehandler := sdk.ChainAnteDecorators(vbd)
 	_, err = antehandler(suite.ctx, invalidTx, false)
 
@@ -99,8 +96,6 @@ func TestValidateMemo(t *testing.T) {
 }
 
 func TestConsumeGasForTxSize(t *testing.T) {
-	t.Skip() // TO FIX BEFORE 0.52 FINAL.
-
 	suite := SetupTestSuite(t, true)
 
 	// keys and addresses
@@ -118,7 +113,7 @@ func TestConsumeGasForTxSize(t *testing.T) {
 		name  string
 		sigV2 signing.SignatureV2
 	}{
-		{"SingleSignatureData", signing.SignatureV2{PubKey: priv1.PubKey(), Data: &signing.SingleSignatureData{}}}, // single signature
+		{"SingleSignatureData", signing.SignatureV2{PubKey: priv1.PubKey()}},
 		{"MultiSignatureData", signing.SignatureV2{PubKey: priv1.PubKey(), Data: multisig.NewMultisig(2)}},
 	}
 
@@ -170,7 +165,6 @@ func TestConsumeGasForTxSize(t *testing.T) {
 
 			// Set suite.ctx with smaller simulated TxBytes manually
 			suite.ctx = suite.ctx.WithTxBytes(simTxBytes)
-			suite.ctx = suite.ctx.WithExecMode(sdk.ExecModeSimulate)
 
 			beforeSimGas := suite.ctx.GasMeter().GasConsumed()
 
@@ -188,8 +182,7 @@ func TestConsumeGasForTxSize(t *testing.T) {
 func TestTxHeightTimeoutDecorator(t *testing.T) {
 	suite := SetupTestSuite(t, true)
 
-	mockHeaderService := &mockHeaderService{}
-	antehandler := sdk.ChainAnteDecorators(ante.NewTxTimeoutHeightDecorator(appmodulev2.Environment{HeaderService: mockHeaderService}))
+	antehandler := sdk.ChainAnteDecorators(ante.NewTxTimeoutHeightDecorator())
 
 	// keys and addresses
 	priv1, _, addr1 := testdata.KeyTestPubAddr()
@@ -236,28 +229,9 @@ func TestTxHeightTimeoutDecorator(t *testing.T) {
 			tx, err := suite.CreateTestTx(suite.ctx, privs, accNums, accSeqs, suite.ctx.ChainID(), signing.SignMode_SIGN_MODE_DIRECT)
 			require.NoError(t, err)
 
-			mockHeaderService.WithBlockHeight(tc.height)
-			mockHeaderService.WithBlockTime(tc.timestamp)
-			_, err = antehandler(suite.ctx, tx, true)
+			ctx := suite.ctx.WithBlockHeight(tc.height).WithBlockTime(tc.timestamp)
+			_, err = antehandler(ctx, tx, true)
 			require.ErrorIs(t, err, tc.expectedErr)
 		})
 	}
-}
-
-type mockHeaderService struct {
-	header.Service
-
-	exp header.Info
-}
-
-func (m *mockHeaderService) HeaderInfo(_ context.Context) header.Info {
-	return m.exp
-}
-
-func (m *mockHeaderService) WithBlockHeight(height int64) {
-	m.exp.Height = height
-}
-
-func (m *mockHeaderService) WithBlockTime(blocktime time.Time) {
-	m.exp.Time = blocktime
 }
